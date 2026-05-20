@@ -16,10 +16,10 @@ ARG TTYD_VERSION=1.7.8
 
 ENV CFLAGS="-std=gnu89 -Wno-implicit-int"
 
-RUN echo "https://mirrors.aliyun.com/alpine/v3.20/main/" >> /etc/apk/repositories \
+RUN echo "https://mirrors.aliyun.com/alpine/v3.22/main/" >> /etc/apk/repositories \
     && apk update \
     && apk add wget gcc g++ make bind-tools \
-    && apk upgrade libexpat \
+    && apk upgrade libexpat libssl3 libcrypto3 \
     && wget https://ohse.de/uwe/releases/lrzsz-0.12.20.tar.gz \
     && tar -xf lrzsz-0.12.20.tar.gz \
     && cd lrzsz-0.12.20 \

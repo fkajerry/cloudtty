@@ -20,9 +20,12 @@ COPY pkg/ pkg/
 # Build
 RUN go build -ldflags="-s -w" -a -o manager cmd/main.go && echo "Building GOARCH of $GOARCH.."
 
-# Use distroless as minimal base image to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/base:nonroot
+# Use debian:12-slim as minimal base image to package the manager binary.
+# Upgrade libssl3 to fix CVE-2025-15467 (requires >= 3.0.18-1~deb12u2).
+FROM debian:12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libssl3=3.0.18-1~deb12u2 \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /
 COPY --from=builder /workspace/manager /bin/manager
 USER 65532:65532
