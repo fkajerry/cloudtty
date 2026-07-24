@@ -1,9 +1,10 @@
 name: Build & Release Image
 
 env:
-  # ghcr.io/cloudtty/cloudtty/cloudshell:latest => ghcr.io/cloudtty/cloudshell:latest
-  # IMAGE_REPO: ${{ github.repository }}
-  IMAGE_REPO: cloudtty
+  # Use the repository owner so forks push to their own GHCR namespace.
+  # NOTE: github.repository_owner (not github.repository), otherwise the path
+  # gains an extra segment: ghcr.io/<owner>/cloudtty/cloudshell:latest
+  IMAGE_REPO: ${{ github.repository_owner }}
   REGISTER: ghcr.io
   IMAGE_ROOT_PATH: docker
   BUILD_PLATFORM: linux/amd64,linux/arm64
@@ -21,6 +22,10 @@ on:
 jobs:
   docker-build:
     runs-on: ubuntu-latest
+    # The repo default for GITHUB_TOKEN is read-only; pushing to GHCR needs write.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Get the version
         id: get_version
