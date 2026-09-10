@@ -13,13 +13,14 @@ FROM ghcr.io/dtzar/helm-kubectl:3.19.1
 SHELL [ "/bin/bash", "-c" ]
 
 ARG TTYD_VERSION=1.7.8
+ARG HELM_VERSION=3.22.0
 
 ENV CFLAGS="-std=gnu89 -Wno-implicit-int"
 
-RUN echo "https://mirrors.aliyun.com/alpine/v3.20/main/" >> /etc/apk/repositories \
+RUN echo "https://mirrors.aliyun.com/alpine/v3.22/main/" >> /etc/apk/repositories \
     && apk update \
     && apk add wget gcc g++ make bind-tools \
-    && apk upgrade libexpat \
+    && apk upgrade --no-cache \
     && wget https://ohse.de/uwe/releases/lrzsz-0.12.20.tar.gz \
     && tar -xf lrzsz-0.12.20.tar.gz \
     && cd lrzsz-0.12.20 \
@@ -41,6 +42,20 @@ RUN ttydArch="$(uname -m)" && echo "Building arch of $ttydArch.." \
     && chmod +x ttyd.${ttydArch} \
     && mv ttyd.${ttydArch} /usr/local/bin/ttyd \
     && which ttyd
+
+# The base image's bundled helm binary is fixed to its build-time version, so
+# apk upgrade never touches it. Replace it with a current release to pick up
+# security fixes (e.g. CVE-2026-33186 in google.golang.org/grpc).
+RUN helmArch="$(uname -m)" && case "${helmArch}" in \
+        x86_64) helmArch=amd64 ;; \
+        aarch64) helmArch=arm64 ;; \
+    esac \
+    && curl -LO https://get.helm.sh/helm-v${HELM_VERSION}-linux-${helmArch}.tar.gz \
+    && tar -xzf helm-v${HELM_VERSION}-linux-${helmArch}.tar.gz \
+    && mv linux-${helmArch}/helm /usr/local/bin/helm \
+    && chmod +x /usr/local/bin/helm \
+    && rm -rf helm-v${HELM_VERSION}-linux-${helmArch}.tar.gz linux-${helmArch} \
+    && helm version
 
 COPY --from=builder /app/dist/inline.html /usr/lib/ttyd/index.html
 COPY ./docker/cloudshell/script/reset.sh  /usr/lib/ttyd/
