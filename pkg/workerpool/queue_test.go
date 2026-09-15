@@ -1,50 +1,92 @@
 package workpool
 
 import (
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// TestQueueConcurrentAllAndAdd guards against a deadlock between All() and Add().
+// TestQueueAllAndAddDoNotDeadlock guards against a deadlock between All() and Add().
 //
 // All() used to call q.Len() while already holding the read lock. Go's RWMutex is
-// write-preferring, so once a concurrent Add() blocks on Lock(), the nested RLock()
-// inside Len() blocks too, and neither goroutine can ever make progress.
-func TestQueueConcurrentAllAndAdd(t *testing.T) {
+// write-preferring: once a concurrent Add() blocks on Lock(), every subsequent
+// RLock() blocks too, including the nested one inside Len(). All() then waits for
+// the pending writer, and the writer waits for All()'s outer read lock. Neither
+// ever makes progress.
+//
+// The queue is deliberately kept small (writers re-add the same few items, which
+// Add() rejects as duplicates after taking the write lock) so that All() spends
+// most of its time in the RLock -> Len window, which is where the race lives.
+func TestQueueAllAndAddDoNotDeadlock(t *testing.T) {
+	const (
+		pairs       = 8
+		items       = 8
+		runFor      = 5 * time.Second
+		stallWindow = 2 * time.Second
+	)
+
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Skip("needs GOMAXPROCS >= 2 to interleave read and write lock acquisitions")
+	}
+
 	q := newQueue()
-	for i := 0; i < 128; i++ {
+	for i := 0; i < items; i++ {
 		q.Add(i)
 	}
 
-	done := make(chan struct{})
+	var ops atomic.Uint64
+	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
-	for i := 0; i < 8; i++ {
+	for i := 0; i < pairs; i++ {
 		wg.Add(2)
+
 		go func() {
 			defer wg.Done()
 			for {
 				select {
-				case <-done:
+				case <-stop:
 					return
 				default:
-					q.All()
 				}
+				q.All()
+				ops.Add(1)
 			}
 		}()
-		go func(base int) {
+
+		go func() {
 			defer wg.Done()
 			for n := 0; ; n++ {
 				select {
-				case <-done:
+				case <-stop:
 					return
 				default:
-					q.Add(base*1_000_000 + n)
 				}
+				q.Add(n % items)
+				ops.Add(1)
 			}
-		}(i)
+		}()
 	}
+
+	var (
+		deadline   = time.Now().Add(runFor)
+		lastOps    = ops.Load()
+		lastChange = time.Now()
+	)
+	for time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+
+		switch cur := ops.Load(); {
+		case cur != lastOps:
+			lastOps, lastChange = cur, time.Now()
+		case time.Since(lastChange) > stallWindow:
+			t.Fatalf("deadlock: no queue operation completed in %s (%d ops total)", stallWindow, cur)
+		}
+	}
+
+	close(stop)
 
 	finished := make(chan struct{})
 	go func() {
@@ -52,17 +94,14 @@ func TestQueueConcurrentAllAndAdd(t *testing.T) {
 		close(finished)
 	}()
 
-	time.Sleep(2 * time.Second)
-	close(done)
-
 	select {
 	case <-finished:
 	case <-time.After(10 * time.Second):
-		t.Fatal("deadlock: goroutines calling All()/Add() did not finish")
+		t.Fatal("deadlock: goroutines did not return after stop")
 	}
 }
 
-// TestQueueGetIsExclusive ensures Get() does not hand the same item to two callers.
+// TestQueueGetIsExclusive ensures Get() never hands the same item to two callers.
 // Get() used to mutate q.queue and q.dirty while holding only a read lock.
 func TestQueueGetIsExclusive(t *testing.T) {
 	const items = 2000
